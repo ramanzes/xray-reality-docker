@@ -1,0 +1,37 @@
+table inet firewall {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iif "lo" accept
+		ct state { established, related } accept
+		tcp dport 10022 accept
+		tcp dport 443 accept
+		udp dport 1194 accept
+		tcp dport 443 accept
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+		ct state { established, related } accept
+		iifname { "lo", "tun0" } oifname "ens3" accept
+		iifname "ens3" oifname { "lo", "tun0" } ct state { established, related, new } accept
+		iifname "tun0" oifname "tun0" accept
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+	}
+}
+table ip nat {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname "ens3" masquerade
+		oifname "ens3" ip saddr 10.8.0.0/24 masquerade
+		ip saddr 192.168.0.0/16 oifname "ens3" masquerade
+	}
+}
+table ip6 nat {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname "ens3" masquerade
+	}
+}

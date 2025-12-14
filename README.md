@@ -52,6 +52,15 @@ Clients may use IPv4 or IPv6 transparently.
 ```bash
 cp .env_firewall.example .env_firewall
 #свои порты декларируем которые нужно оставить открытыми. внимание на порт ssh
+#смотрим порт ssh
+sshd -T | grep '^port '
+#смотрим порты
+docker ps
+#больше информации по портам
+netstat -anp --udp --tcp | grep LISTEN
+
+
+#вносим эту информацию сюда
 vim .env_firewall
 
 iptables -F

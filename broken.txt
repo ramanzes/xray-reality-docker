@@ -1,0 +1,27 @@
+table inet filter {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iif "lo" accept
+		ct state established,related accept
+		tcp dport 10022 accept
+		tcp dport 443 accept
+		udp dport 1194 accept
+		tcp dport 5432 accept
+		tcp dport 43443 accept
+		tcp dport 443 accept
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+	}
+}
+table ip nat {
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		masquerade
+	}
+}
