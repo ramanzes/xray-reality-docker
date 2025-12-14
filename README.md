@@ -47,10 +47,30 @@ If your VPS has IPv6, links will be generated automatically.
 
 Clients may use IPv4 or IPv6 transparently.
 
-## Firewall
+## Firewall (nftables)
+
 ```bash
-./firewall.sh
+cp .env_firewall.example .env_firewall
+#свои порты декларируем которые нужно оставить открытыми. внимание на порт ssh
+vim .env_firewall
+
+iptables -F
+ip6tables -F
+
+systemctl disable iptables || true
+systemctl disable ufw || true
+
+apt update
+apt install -y nftables
+
+./firewall_nft.sh
+
+
+systemctl enable nftables
+systemctl start nftables
+
 ```
+
 
 ## Health Check
 

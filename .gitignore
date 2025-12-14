@@ -1,4 +1,5 @@
 .env
+.env_firewall
 clients/*
 !clients/.gitkeep
 xray/config.json
