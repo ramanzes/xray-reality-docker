@@ -1,0 +1,37 @@
+#!/bin/bash
+
+CMD="$1"
+NAME="$2"
+
+case "$CMD" in
+  add)
+    docker exec xray /app/scripts/add_vless_user.sh "$NAME"
+    ;;
+  disable)
+    docker exec xray /app/scripts/disable_vless_client.sh "$NAME"
+    ;;
+  enable)
+    docker exec xray /app/scripts/enable_vless_client.sh "$NAME"
+    ;;
+  list)
+    docker exec xray jq '
+      .inbounds[].settings.clients[]?.email // "no-email"
+    ' /app/xray/config.json
+    ;;
+  show)
+    docker exec xray /app/scripts/show_client.sh "$NAME"
+    ;;
+  --version)
+       cat VERSION
+    ;;
+  *)
+    echo "xrayctl v$(cat VERSION)"
+    echo "Использование:"
+
+    echo "  xrayctl add <name>"
+    echo "  xrayctl disable <name>"
+    echo "  xrayctl enable <name>"
+    echo "  xrayctl list"
+    echo "  xrayctl show <name>"
+    ;;
+esac

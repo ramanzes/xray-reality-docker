@@ -1,0 +1,4 @@
+.env
+clients/*
+!clients/.gitkeep
+xray/config.json
