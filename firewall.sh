@@ -1,43 +1,49 @@
 #!/bin/bash
 set -e
 
-echo "🔥 Applying firewall rules..."
+echo "🔥 Applying SAFE firewall rules (Docker-aware)"
 
-# Flush
-iptables -F
-iptables -X
-ip6tables -F
-ip6tables -X
+### 1. Определяем SSH порт корректно
+SSH_PORT=$(sshd -T | awk '/^port / {print $2}' | head -n1)
 
-# Default policies
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-iptables -P OUTPUT ACCEPT
+echo "🔐 SSH port detected: $SSH_PORT"
 
-ip6tables -P INPUT DROP
-ip6tables -P FORWARD DROP
-ip6tables -P OUTPUT ACCEPT
+### 2. Получаем Xray порт из .env
+source .env
+XRAY_PORT="$SERVER_PORT"
 
-# Allow loopback
+### 3. Разрешаем loopback
+iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || \
 iptables -A INPUT -i lo -j ACCEPT
+
+ip6tables -C INPUT -i lo -j ACCEPT 2>/dev/null || \
 ip6tables -A INPUT -i lo -j ACCEPT
 
-# Allow established
+### 4. Разрешаем ESTABLISHED
+iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
 iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+ip6tables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
 ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# SSH
-iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
-iptables -A INPUT -p tcp --dport 10022 -j ACCEPT
-ip6tables -A INPUT -p tcp --dport 10022 -j ACCEPT
+### 5. SSH
+iptables -C INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT 2>/dev/null || \
+iptables -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
 
-# Xray Reality
-iptables -A INPUT -p tcp --dport 443 -j ACCEPT
-ip6tables -A INPUT -p tcp --dport 443 -j ACCEPT
+ip6tables -C INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT 2>/dev/null || \
+ip6tables -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
 
-# Optional HTTP (ACME / redirect)
-iptables -A INPUT -p tcp --dport 80 -j ACCEPT
-ip6tables -A INPUT -p tcp --dport 80 -j ACCEPT
+### 6. Xray Reality
+iptables -C INPUT -p tcp --dport "$XRAY_PORT" -j ACCEPT 2>/dev/null || \
+iptables -A INPUT -p tcp --dport "$XRAY_PORT" -j ACCEPT
 
-echo "✅ Firewall rules applied"
+ip6tables -C INPUT -p tcp --dport "$XRAY_PORT" -j ACCEPT 2>/dev/null || \
+ip6tables -A INPUT -p tcp --dport "$XRAY_PORT" -j ACCEPT
+
+### 7. Docker traffic (КРИТИЧНО)
+iptables -C FORWARD -j DOCKER-USER 2>/dev/null || true
+
+iptables -C DOCKER-USER -j RETURN 2>/dev/null || \
+iptables -I DOCKER-USER -j RETURN
+
+echo "✅ Firewall rules applied safely"

@@ -1,15 +1,19 @@
 #!/bin/bash
+set -e
+
+source /app/.env
 
 if [ -z "$1" ]; then
   echo "❌ Использование: $0 client_name"
   exit 1
 fi
 
-FILE="clients/$1.txt"
-CONFIG="/usr/local/etc/xray/config.json"
+CLIENT_NAME="$1"
+FILE="/app/clients/${CLIENT_NAME}.txt"
+CONFIG="/app/xray/config.json"
 
 if [ ! -f "$FILE" ]; then
-  echo "❌ Файл $FILE не найден"
+  echo "❌ Файл клиента не найден: $FILE"
   exit 1
 fi
 
@@ -20,23 +24,23 @@ if [ -z "$UUID" ]; then
   exit 1
 fi
 
-# Проверяем, есть ли клиент в clients
-EXISTS=$(jq --arg uuid "$UUID" '
+# Проверяем, что клиент активен
+FOUND=$(jq --arg uuid "$UUID" '
   .inbounds[].settings.clients[]? | select(.id == $uuid)
 ' "$CONFIG")
 
-if [ -z "$EXISTS" ]; then
+if [ -z "$FOUND" ]; then
   echo "❌ Клиент не найден в active clients"
   exit 1
 fi
 
-# 1. Гарантируем наличие disabled_clients как массива
+# Гарантируем наличие disabled_clients
 jq '
   .inbounds[].settings |=
     (if has("disabled_clients") then . else . + { "disabled_clients": [] } end)
 ' "$CONFIG" > /tmp/xray.json && mv /tmp/xray.json "$CONFIG"
 
-# 2. Перенос клиента
+# Перенос клиента
 jq --arg uuid "$UUID" '
   .inbounds[].settings |= (
     .disabled_clients +=
@@ -46,7 +50,9 @@ jq --arg uuid "$UUID" '
   )
 ' "$CONFIG" > /tmp/xray.json && mv /tmp/xray.json "$CONFIG"
 
-systemctl restart xray
+# Перечитываем конфиг
+pkill -HUP xray || true
 
 echo "⏸️ Клиент временно отключён"
+echo "Имя: $CLIENT_NAME"
 echo "UUID: $UUID"

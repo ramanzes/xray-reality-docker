@@ -1,7 +1,8 @@
 FROM debian:12-slim
 
-RUN apt update && apt install -y \
+RUN apt update && apt upgrade -y && apt install -y \
     curl jq ca-certificates openssl \
+    qrencode \
  && rm -rf /var/lib/apt/lists/*
 
 # Xray

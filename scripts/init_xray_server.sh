@@ -13,15 +13,7 @@ fi
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
 ENV_FILE=".env"
 
-### Установка зависимостей
-apt update -y
-apt install -y curl jq
 
-### Установка Xray (если не установлен)
-if ! command -v xray >/dev/null 2>&1; then
-  echo "▶ Устанавливаю Xray..."
-  bash <(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh)
-fi
 
 ### Генерация UUID
 UUID=$(xray uuid)
@@ -40,6 +32,7 @@ IPV4=$SERVER_IP
 IPV6=$(curl -6 -s https://api64.ipify.org || true)
 
 
+FLOW="xtls-rprx-vision"
 
 ### SNI
 SNI="www.cloudflare.com"
@@ -99,6 +92,7 @@ SERVER_IPV4=$IPV4
 SERVER_IPV6=$IPV6
 SERVER_PORT=443
 SNI=$SNI
+FLOW=$FLOW
 
 UUID_ADMIN=$UUID
 

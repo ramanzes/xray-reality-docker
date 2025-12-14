@@ -1,67 +1,74 @@
 #!/bin/bash
+set -e
 
 source /app/.env
-
-apt install jq qrencode -y
 
 if [ -z "$1" ]; then
   echo "❌ Использование: $0 client_name"
   exit 1
 fi
+
 CLIENT_NAME="$1"
+CONFIG="/app/xray/config.json"
+CLIENT_FILE="/app/clients/${CLIENT_NAME}.txt"
 
-#SERVER_IP="37.46.16.212"
-#PORT="443"
-#SNI="www.cloudflare.com"
-#SHORT_ID="123456"
-#PUBLIC_KEY="hiLNbci89WD0R3bzmi1wV-8x4Ndx4ccWCeucsq0ZXBg"
-#FLOW="xtls-rprx-vision"
-
-#UUID=$(xray uuid)
-
-
-
-
-
-
-#CONFIG="/usr/local/etc/xray/config.json"
-
-
-
-LINK_V4="vless://$UUID@$SERVER_IPV4:443?encryption=none&security=reality&flow=xtls-rprx-vision&sni=www.cloudflare.com&fp=chrome&pbk=$PUBLIC_KEY&type=tcp#$CLIENT_NAME"
-
-if [ -n "$SERVER_IPV6" ]; then
-  LINK_V6="vless://$UUID@[${SERVER_IPV6}]:443?encryption=none&security=reality&flow=xtls-rprx-vision&sni=www.cloudflare.com&fp=chrome&pbk=$PUBLIC_KEY&type=tcp#$CLIENT_NAME"
+# Проверка, существует ли клиент
+if jq -e --arg name "$CLIENT_NAME" \
+  '.inbounds[].settings.clients[]?.email == $name' \
+  "$CONFIG" >/dev/null; then
+  echo "❌ Клиент с именем $CLIENT_NAME уже существует"
+  exit 1
 fi
 
+# Генерация UUID для клиента
+UUID_CLIENT=$(xray uuid)
 
-jq '.inbounds[0].settings.clients += [{
-  "id": "'"$UUID"'",
-  "flow": "'"$FLOW"'",
-  "email": "'"$CLIENT_NAME"'"
-}]' $CONFIG > /tmp/xray.json && mv /tmp/xray.json $CONFIG
+# Формирование ссылок
+LINK_V4="vless://${UUID_CLIENT}@${SERVER_IPV4}:${SERVER_PORT}?type=tcp&security=reality&encryption=none&flow=${FLOW}&sni=${SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_SHORT_ID}#${CLIENT_NAME}"
 
-systemctl restart xray
+if [ -n "$SERVER_IPV6" ]; then
+  LINK_V6="vless://${UUID_CLIENT}@[${SERVER_IPV6}]:${SERVER_PORT}?type=tcp&security=reality&encryption=none&flow=${FLOW}&sni=${SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_SHORT_ID}#${CLIENT_NAME}"
+fi
 
-#LINK="vless://${UUID}@${SERVER_IP}:${PORT}?type=tcp&security=reality&flow=${FLOW}&sni=${SNI}&fp=chrome&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&alpn=h2,http/1.1#${CLIENT_NAME}"
+# Добавление клиента в config.json
+jq --arg uuid "$UUID_CLIENT" \
+   --arg email "$CLIENT_NAME" \
+   --arg flow "$FLOW" \
+  '
+  .inbounds[].settings.clients += [{
+    id: $uuid,
+    flow: $flow,
+    email: $email
+  }]
+  ' "$CONFIG" > /tmp/xray.json && mv /tmp/xray.json "$CONFIG"
 
-
-#echo "$LINK" > "clients/${CLIENT_NAME}.txt"
-
+# Сохранение клиента
 {
+  echo "# Client: $CLIENT_NAME"
+  echo "# UUID: $UUID_CLIENT"
+  echo
   echo "# IPv4"
   echo "$LINK_V4"
-  [ -n "$LINK_V6" ] && echo -e "\n# IPv6\n$LINK_V6"
-} > "/app/clients/$CLIENT_NAME.txt"
+  if [ -n "$LINK_V6" ]; then
+    echo
+    echo "# IPv6"
+    echo "$LINK_V6"
+  fi
+} > "$CLIENT_FILE"
+
+# QR-код (ANSI, для терминала)
+if command -v qrencode >/dev/null 2>&1; then
+  echo
+  echo "# QR (IPv4)"
+  qrencode -t ANSIUTF9 "$LINK_V4" >> "$CLIENT_FILE"
+
+  echo "# QR (IPv6)"
+  qrencode -t ANSIUTF8 "$LINK_V6" >> "$CLIENT_FILE"
+fi
 
 echo "=============================="
-echo "Клиент добавлен: $CLIENT_NAME"
-echo "UUID: $UUID"
-echo "Файл: ./clients/${CLIENT_NAME}.txt"
-echo "QR в этом же код в файле"
+echo "✅ Клиент добавлен"
+echo "Имя:   $CLIENT_NAME"
+echo "UUID:  $UUID_CLIENT"
+echo "Файл:  clients/${CLIENT_NAME}.txt"
 echo "=============================="
-
-
-
-qrencode -t ANSIUTF8 "$LINK" >> clients/${CLIENT_NAME}.txt
-
