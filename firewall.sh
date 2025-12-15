@@ -1,60 +1,76 @@
 #!/bin/bash
 set -e
 
-echo "🔥 Applying SAFE firewall rules (Docker-aware)"
+echo "🔥 Applying SAFE firewall rules (system + docker aware)"
 
-### 1. Определяем SSH порт корректно
+BACKUP_DIR="./iptables_backup/$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+
+echo "💾 Backing up current iptables rules..."
+iptables-save > "$BACKUP_DIR/iptables_v4.rules"
+ip6tables-save > "$BACKUP_DIR/iptables_v6.rules"
+
+cat > "$BACKUP_DIR/RESTORE.txt" <<EOF
+To restore rules:
+iptables-restore < iptables_v4.rules
+ip6tables-restore < iptables_v6.rules
+EOF
+
+echo "🔥 Applying VPN-aware firewall rules"
+
+### === Определяем интерфейс ===
+WAN_INTERFACE=$(ip route | awk '/default/ {print $5}' | head -1)
+[ -z "$WAN_INTERFACE" ] && WAN_INTERFACE="eth0"
+echo "🌐 WAN interface: $WAN_INTERFACE"
+
+### === SSH порт ===
 SSH_PORT=$(sshd -T | awk '/^port / {print $2}' | head -n1)
+echo "🔐 SSH port: $SSH_PORT"
 
-echo "🔐 SSH port detected: $SSH_PORT"
+### === VPN / Xray ===
+XRAY_PORT=443
+OPENVPN_PORT=1194
 
-### 2. Получаем Xray порт из .env
-#source .env
-#XRAY_PORT="$SERVER_PORT"
+### === Очистка ===
+iptables -F
+iptables -t nat -F
+iptables -X
 
-XRAY_PORT="443"
+### === Политики ===
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT ACCEPT
 
-# Определяем WAN интерфейс (автоматически)
-WAN_INTERFACE=$(ip route | grep default | awk '{print $5}' | head -1)
-if [ -z "$WAN_INTERFACE" ]; then
-  WAN_INTERFACE=$(ip -4 addr show | grep -v "127.0.0.1" | grep -oP '(ens\d+|eth\d+|enp\d+s\d+|en[ox]\d+s\d+)' | head -1)
-fi
-echo "🌐 Using WAN interface: ${WAN_INTERFACE:-eth0}"
-
-iptables -t nat -A POSTROUTING -o $WAN_INTERFACE -j MASQUERADE
-
-### 3. Разрешаем loopback
-iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || \
+### === Loopback ===
 iptables -A INPUT -i lo -j ACCEPT
 
-ip6tables -C INPUT -i lo -j ACCEPT 2>/dev/null || \
-ip6tables -A INPUT -i lo -j ACCEPT
-
-### 4. Разрешаем ESTABLISHED
-iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+### === Established ===
 iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-ip6tables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
-ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-
-### 5. SSH
-iptables -C INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT 2>/dev/null || \
+### === SSH ===
 iptables -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
 
-ip6tables -C INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT 2>/dev/null || \
-ip6tables -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
-
-### 6. Xray Reality
-iptables -C INPUT -p tcp --dport "$XRAY_PORT" -j ACCEPT 2>/dev/null || \
+### === VPN / Xray ===
 iptables -A INPUT -p tcp --dport "$XRAY_PORT" -j ACCEPT
+iptables -A INPUT -p udp --dport "$OPENVPN_PORT" -j ACCEPT
 
-ip6tables -C INPUT -p tcp --dport "$XRAY_PORT" -j ACCEPT 2>/dev/null || \
-ip6tables -A INPUT -p tcp --dport "$XRAY_PORT" -j ACCEPT
+### === ICMP (важно для мобильных сетей) ===
+iptables -A INPUT -p icmp -j ACCEPT
 
-### 7. Docker traffic (КРИТИЧНО)
-#iptables -C FORWARD -j DOCKER-USER 2>/dev/null || true
+### === FORWARD для VPN сетей ===
+iptables -A FORWARD -s 10.0.0.0/8 -j ACCEPT
+iptables -A FORWARD -d 10.0.0.0/8 -j ACCEPT
 
-#iptables -C DOCKER-USER -j RETURN 2>/dev/null || \
-#iptables -I DOCKER-USER -j RETURN
+### === NAT ===
+iptables -t nat -A POSTROUTING -s 10.0.0.0/8 -o "$WAN_INTERFACE" -j MASQUERADE
 
-echo "✅ Firewall rules applied safely"
+### === Docker (если используется) ===
+iptables -A FORWARD -i docker0 -j ACCEPT
+iptables -A FORWARD -o docker0 -j ACCEPT
+
+echo "✅ Firewall applied successfully"
+
+
+
+systemctl restart iptables.service

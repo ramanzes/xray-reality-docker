@@ -1,0 +1,3 @@
+To restore rules:
+iptables-restore < iptables_v4.rules
+ip6tables-restore < iptables_v6.rules
