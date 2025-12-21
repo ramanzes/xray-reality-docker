@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
 
-echo "🔥 Applying SAFE firewall rules (system + docker aware)"
+echo "🔥 Applying SAFE firewall rules (system + docker + VPN aware + kill-switch)"
 
+# --- Backup ---
 BACKUP_DIR="./iptables_backup/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
@@ -16,61 +17,73 @@ iptables-restore < iptables_v4.rules
 ip6tables-restore < iptables_v6.rules
 EOF
 
-echo "🔥 Applying VPN-aware firewall rules"
-
-### === Определяем интерфейс ===
+# --- Detect WAN interface ---
 WAN_INTERFACE=$(ip route | awk '/default/ {print $5}' | head -1)
-[ -z "$WAN_INTERFACE" ] && WAN_INTERFACE="eth0"
+[ -z "$WAN_INTERFACE" ] && WAN_INTERFACE="ens3"
 echo "🌐 WAN interface: $WAN_INTERFACE"
 
-### === SSH порт ===
+# --- Detect SSH port ---
 SSH_PORT=$(sshd -T | awk '/^port / {print $2}' | head -n1)
 echo "🔐 SSH port: $SSH_PORT"
 
-### === VPN / Xray ===
-XRAY_PORT=443
+# --- VPN / services ports ---
 OPENVPN_PORT=1194
+XRAY_PORT=443  # пример, если есть Xray
 
-### === Очистка ===
+# --- Clear chains safely ---
 iptables -F
 iptables -t nat -F
 iptables -X
 
-### === Политики ===
+# --- Default policies ---
 iptables -P INPUT DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT ACCEPT
 
-### === Loopback ===
+# --- Loopback ---
 iptables -A INPUT -i lo -j ACCEPT
 
-### === Established ===
+# --- Established / Related ---
 iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-### === SSH ===
+# --- SSH ---
 iptables -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
 
-### === VPN / Xray ===
+# --- VPN / Xray ports ---
 iptables -A INPUT -p tcp --dport "$XRAY_PORT" -j ACCEPT
 iptables -A INPUT -p udp --dport "$OPENVPN_PORT" -j ACCEPT
 
-### === ICMP (важно для мобильных сетей) ===
+# --- ICMP (важно для мобильных сетей) ---
 iptables -A INPUT -p icmp -j ACCEPT
 
-### === FORWARD для VPN сетей ===
-iptables -A FORWARD -s 10.0.0.0/8 -j ACCEPT
-iptables -A FORWARD -d 10.0.0.0/8 -j ACCEPT
+# --- VPN forwarding ---
+VPN_NET="192.168.255.0/24"
 
-### === NAT ===
-iptables -t nat -A POSTROUTING -s 10.0.0.0/8 -o "$WAN_INTERFACE" -j MASQUERADE
+# Разрешаем только выход в интернет через WAN (kill-switch)
+iptables -A FORWARD -i tun0 -o "$WAN_INTERFACE" -s "$VPN_NET" -j ACCEPT
+iptables -A FORWARD -i "$WAN_INTERFACE" -o tun0 -d "$VPN_NET" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 
-### === Docker (если используется) ===
+# --- Блокируем доступ VPN к Docker и внутренним сетям ---
+DOCKER_NETS=("172.17.0.0/16" "172.18.0.0/16" "172.19.0.0/16")
+for NET in "${DOCKER_NETS[@]}"; do
+    iptables -A FORWARD -s "$VPN_NET" -d "$NET" -j DROP
+done
+
+# Блокируем доступ VPN к локальным подсетям (опционально)
+iptables -A FORWARD -s "$VPN_NET" -d 127.0.0.0/8 -j DROP
+iptables -A FORWARD -s "$VPN_NET" -d 192.168.0.0/16 -j DROP
+iptables -A FORWARD -s "$VPN_NET" -d 10.0.0.0/8 -j DROP
+iptables -A FORWARD -s "$VPN_NET" -d 224.0.0.0/4 -j DROP
+
+# --- NAT (MASQUERADE) ---
+iptables -t nat -A POSTROUTING -s "$VPN_NET" -o "$WAN_INTERFACE" -j MASQUERADE
+
+# --- Docker safe rules ---
+# Docker мосты будут работать, не трогая правила контейнеров
 iptables -A FORWARD -i docker0 -j ACCEPT
 iptables -A FORWARD -o docker0 -j ACCEPT
 
 echo "✅ Firewall applied successfully"
+echo "💾 Backup stored in $BACKUP_DIR"
 
-
-
-systemctl restart iptables.service

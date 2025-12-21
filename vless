@@ -1,0 +1,188 @@
+#!/bin/bash
+set -e
+
+CONFIG="/usr/local/etc/xray/config.json"
+CLIENTS_DIR="clients"
+ENV_FILE=".env"
+FLOW="xtls-rprx-vision"
+
+
+usage() {
+  cat <<EOF
+Использование:
+  vless add <client_name>
+  vless enable <client_name>
+  vless disable <client_name>
+  vless remove <client_name>
+  vless list
+  ----------------------------------------
+  vless init #создание новой конфигурации сервера xray на vless !!!! ОСТОРОЖНО внимание сносит существующие настройки всех клиентов
+  vless status 
+  vless stop
+  vless start
+EOF
+  exit 1
+}
+
+# --- проверки ---
+[ -f "$CONFIG" ] || { echo "❌ Нет $CONFIG"; 
+echo "запустите чтобы начать ./scripts/init_xray_server.sh"
+exit 1; }
+[ -f "$ENV_FILE" ] || { echo "❌ Нет .env"; exit 1; }
+
+mkdir -p "$CLIENTS_DIR"
+source "$ENV_FILE"
+
+extract_uuid() {
+  local file="$1"
+  sed -n 's|^vless://\([^@]*\)@.*|\1|p' "$file"
+}
+
+restart_xray() {
+  systemctl restart xray
+}
+
+choose_random_shortid() {
+  IFS=',' read -ra IDS <<< "$REALITY_SHORT_IDS"
+  COUNT=${#IDS[@]}
+  [ "$COUNT" -gt 0 ] || { echo "❌ REALITY_SHORT_IDS пуст"; exit 1; }
+  IDX=$((RANDOM % COUNT))
+  echo "${IDS[$IDX]}"
+}
+
+CMD="$1"
+NAME="$2"
+
+case "$CMD" in
+
+status)
+echo "service xray"
+service xray status 
+echo "service iptables"
+service iptables status
+;;
+
+stop)
+echo "service xray"
+service xray stop 
+;;
+restart)
+echo "service xray"
+service xray restart
+echo "service iptables"
+service iptables restart
+;;
+
+init)
+./script/init_xray_server.sh
+;;
+
+
+add)
+  [ -z "$NAME" ] && usage
+
+  REALITY_SHORT_ID="$(choose_random_shortid)"
+  UUID="$(xray uuid)"
+
+  # Проверка дублирования email
+  if jq -e --arg email "$NAME" '.inbounds[].settings.clients[]? | select(.email == $email)' "$CONFIG" >/dev/null; then
+    echo "❌ Клиент с именем '$NAME' уже существует"
+    exit 1
+  fi
+
+  # Добавление клиента
+  jq --arg uuid "$UUID" --arg flow "$FLOW" --arg email "$NAME" \
+     '.inbounds[0].settings.clients += [{"id": $uuid, "flow": $flow, "email": $email}]' \
+     "$CONFIG" > /tmp/xray.json && mv /tmp/xray.json "$CONFIG"
+
+  # Формирование ссылки Reality
+  LINK="vless://${UUID}@${SERVER_IPV4}:${SERVER_PORT}?type=tcp&security=reality&flow=${FLOW}&sni=${SNI}&fp=chrome&pbk=${REALITY_PUBLIC_KEY}&sid=${REALITY_SHORT_ID}&alpn=h2,http/1.1#${NAME}"
+
+  CLIENT_FILE="${CLIENTS_DIR}/${NAME}.txt"
+  {
+    echo "$LINK"
+    echo
+    qrencode -t ANSIUTF8 "$LINK"
+  } > "$CLIENT_FILE"
+  chmod 600 "$CLIENT_FILE"
+
+  restart_xray
+
+  echo "✅ Клиент добавлен: $NAME"
+  echo "UUID: $UUID"
+  echo "Short ID: $REALITY_SHORT_ID"
+  echo "Файл: $CLIENT_FILE"
+  ;;
+
+disable)
+  [ -z "$NAME" ] && usage
+
+  FILE="$CLIENTS_DIR/$NAME.txt"
+  [ -f "$FILE" ] || { echo "❌ Нет $FILE"; exit 1; }
+
+  UUID="$(extract_uuid "$FILE")"
+
+  jq '.inbounds[].settings |= (if has("disabled_clients") then . else . + { "disabled_clients": [] } end)' \
+     "$CONFIG" > /tmp/xray.json && mv /tmp/xray.json "$CONFIG"
+
+  jq --arg uuid "$UUID" \
+     '.inbounds[].settings |= (.disabled_clients += [ .clients[] | select(.id == $uuid) ] | .clients |= map(select(.id != $uuid)))' \
+     "$CONFIG" > /tmp/xray.json && mv /tmp/xray.json "$CONFIG"
+
+  restart_xray
+  echo "⏸ Клиент отключён: $NAME"
+  ;;
+
+enable)
+  [ -z "$NAME" ] && usage
+
+  FILE="$CLIENTS_DIR/$NAME.txt"
+  [ -f "$FILE" ] || { echo "❌ Нет $FILE"; exit 1; }
+
+  UUID="$(extract_uuid "$FILE")"
+
+  jq --arg uuid "$UUID" \
+     '.inbounds[].settings |= (.clients += [ .disabled_clients[] | select(.id == $uuid) ] | .disabled_clients |= map(select(.id != $uuid)))' \
+     "$CONFIG" > /tmp/xray.json && mv /tmp/xray.json "$CONFIG"
+
+  restart_xray
+  echo "▶ Клиент включён: $NAME"
+  ;;
+
+remove)
+  [ -z "$NAME" ] && usage
+
+  FILE="$CLIENTS_DIR/$NAME.txt"
+  [ -f "$FILE" ] || { echo "❌ Нет $FILE"; exit 1; }
+
+  UUID="$(extract_uuid "$FILE")"
+
+  jq --arg uuid "$UUID" \
+     '.inbounds[].settings |= (.clients |= map(select(.id != $uuid)) | .disabled_clients |= map(select(.id != $uuid)))' \
+     "$CONFIG" > /tmp/xray.json && mv /tmp/xray.json "$CONFIG"
+
+  rm -f "$FILE"
+  restart_xray
+
+  echo "🗑 Клиент полностью удалён: $NAME"
+  ;;
+
+list)
+  echo "🟢 Активные клиенты:"
+  jq -r '.inbounds[].settings.clients[]?.email' "$CONFIG"
+
+  echo
+  echo "⏸ Отключённые клиенты:"
+  jq -r '.inbounds[].settings.disabled_clients[]?.email' "$CONFIG"
+  ;;
+
+
+
+
+
+
+*)
+  usage
+  ;;
+esac
+
